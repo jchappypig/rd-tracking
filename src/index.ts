@@ -503,9 +503,19 @@ async function main() {
                }
            }
            
-           // Add aggregated data to the summary sheet
+           // Convert aggregated data to array and sort by project, then by person name
+           const sortedData = Array.from(aggregatedData.values()).sort((a, b) => {
+               // First sort by project
+               if (a.project !== b.project) {
+                   return a.project.localeCompare(b.project);
+               }
+               // Then sort by person name within the same project
+               return a.who.localeCompare(b.who);
+           });
+           
+           // Add sorted aggregated data to the summary sheet
            let summaryCount = 0;
-           for (const [key, data] of aggregatedData) {
+           for (const data of sortedData) {
                const workItemsList = Array.from(data.workItems).join(', ');
                summarySheet.addRow([
                    data.project,
