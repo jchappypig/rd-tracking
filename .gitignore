@@ -1,0 +1,14 @@
+# Node modules
+node_modules/
+
+# Compiled output
+dist/
+
+# Input/output Excel files
+*.xlsx
+
+# Logs
+*.log
+
+# Mac system files
+.DS_Store
