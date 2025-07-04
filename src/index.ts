@@ -132,9 +132,32 @@ async function main() {
             return totalHours;
         }
 
+        // Helper function to count the number of people working on a ticket
+        function getPeopleCount(ticket: Ticket): number {
+            const mob = ticket['Mob'] || '';
+            const assignee = ticket['Assignee'] || '';
+            
+            // If there's a mob, count the number of people (comma-separated)
+            if (mob && mob.trim() !== '') {
+                const people = mob.split(',').map((name: string) => name.trim()).filter((name: string) => name !== '');
+                return people.length;
+            }
+            
+            // If there's an assignee but no mob, it's one person
+            if (assignee && assignee.trim() !== '' && assignee.trim() !== 'Unassigned') {
+                return 1;
+            }
+            
+            // Default to 1 if no clear assignment
+            return 1;
+        }
+
         // Helper function to get WIP hours for a ticket and its children
         function getWIPHours(ticket: Ticket): number {
-            const ticketHours = parseTimeToHours(ticket['Work Hours in Progress'] || '');
+            const baseHours = parseTimeToHours(ticket['Work Hours in Progress'] || '');
+            const peopleCount = getPeopleCount(ticket);
+            const ticketHours = baseHours * peopleCount;
+            
             const children = getChildren(ticket);
             
             if (children.length === 0) {
