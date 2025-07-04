@@ -17,7 +17,7 @@ type Contributor = {
     who: string;
     role: string;
     activityType: string;
-    hoursCost: string;
+    hoursCost: number;
     phase: string;
     workItem: string;
 };
@@ -344,7 +344,7 @@ async function main() {
                            who: person,
                            role: 'Employee',
                            activityType: rdtiActivity === 'Platform' ? 'Support' : 'Core',
-                           hoursCost: baseHours.toFixed(2),
+                           hoursCost: baseHours,
                            phase: 'Development',
                            workItem: ticket['Work item key']
                        });
@@ -357,7 +357,7 @@ async function main() {
                        who: assignee,
                        role: 'Employee',
                        activityType: rdtiActivity === 'Platform' ? 'Support' : 'Core',
-                       hoursCost: baseHours.toFixed(2),
+                       hoursCost: baseHours,
                        phase: 'Development',
                        workItem: ticket['Work item key']
                    });
@@ -439,7 +439,7 @@ async function main() {
                    
                    contributors.forEach(contributor => {
                        // Only add if the contributor actually has hours
-                       if (parseFloat(contributor.hoursCost) > 0) {
+                       if (contributor.hoursCost > 0) {
                            transformedSheet.addRow([
                                contributor.project,
                                contributor.who,
@@ -479,7 +479,7 @@ async function main() {
                    const contributors = traceContributorsFromLinkedItems(ticket);
                    
                    contributors.forEach(contributor => {
-                       const hours = parseFloat(contributor.hoursCost);
+                       const hours = contributor.hoursCost;
                        if (hours > 0) {
                            const key = `${contributor.project}|${contributor.who}`;
                            
@@ -522,7 +522,7 @@ async function main() {
                    data.who,
                    data.role,
                    data.activityType,
-                   data.totalHours.toFixed(2),
+                   data.totalHours,
                    data.phase,
                    workItemsList
                ]);
