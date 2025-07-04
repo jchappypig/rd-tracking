@@ -455,10 +455,75 @@ async function main() {
                }
            }
   
+           // Create aggregated summary sheet
+           const summarySheet = outWorkbook.addWorksheet('Project Summary');
+           
+           // Add headers for the summary sheet (same as transformed data)
+           const summaryHeaders = ['Project', 'Who', 'Role', 'Activity Type', 'Hours/Cost', 'Phase', 'Work Item'];
+           summarySheet.addRow(summaryHeaders);
+           
+           // Aggregate contributors by Project + Who
+           const aggregatedData = new Map<string, {
+               project: string;
+               who: string;
+               role: string;
+               activityType: string;
+               totalHours: number;
+               phase: string;
+               workItems: Set<string>;
+           }>();
+           
+           // Process MAP tickets to get individual contributors and aggregate them
+           for (const ticket of rows) {
+               if (isMapTicket(ticket) && ticket['R&DTI Activity']) {
+                   const contributors = traceContributorsFromLinkedItems(ticket);
+                   
+                   contributors.forEach(contributor => {
+                       const hours = parseFloat(contributor.hoursCost);
+                       if (hours > 0) {
+                           const key = `${contributor.project}|${contributor.who}`;
+                           
+                           if (aggregatedData.has(key)) {
+                               const existing = aggregatedData.get(key)!;
+                               existing.totalHours += hours;
+                               existing.workItems.add(contributor.workItem);
+                           } else {
+                               aggregatedData.set(key, {
+                                   project: contributor.project,
+                                   who: contributor.who,
+                                   role: contributor.role,
+                                   activityType: contributor.activityType,
+                                   totalHours: hours,
+                                   phase: contributor.phase,
+                                   workItems: new Set([contributor.workItem])
+                               });
+                           }
+                       }
+                   });
+               }
+           }
+           
+           // Add aggregated data to the summary sheet
+           let summaryCount = 0;
+           for (const [key, data] of aggregatedData) {
+               const workItemsList = Array.from(data.workItems).join(', ');
+               summarySheet.addRow([
+                   data.project,
+                   data.who,
+                   data.role,
+                   data.activityType,
+                   data.totalHours.toFixed(2),
+                   data.phase,
+                   workItemsList
+               ]);
+               summaryCount++;
+           }
+
            await outWorkbook.xlsx.writeFile(path.resolve(OUTPUT_FILE));
            console.log(`✅ File saved to ${OUTPUT_FILE}`);
            console.log(`✅ Updated ${processedCount} rows with R&DTI Activity from linked MAP tickets`);
            console.log(`✅ Created transformed data sheet with ${contributorCount} individual contributors`);
+           console.log(`✅ Created project summary sheet with ${summaryCount} aggregated contributors`);
            
        } catch (error) {
            console.error('❌ Error occurred:', error);
