@@ -164,7 +164,23 @@ async function main() {
                 return ticketHours;
             }
             
-            // Calculate sum of children's WIP hours
+            // Check if this is a case where parent has hours but children have people assignments
+            const childrenHaveHours = children.some(child => parseTimeToHours(child['Work Hours in Progress'] || '') > 0);
+            
+            if (!childrenHaveHours && baseHours > 0) {
+                // Parent has hours but children don't - use parent hours with children's people count
+                let totalPeopleFromChildren = 0;
+                for (const child of children) {
+                    totalPeopleFromChildren += getPeopleCount(child);
+                }
+                
+                // If children have people assignments, use parent hours with children's people count
+                if (totalPeopleFromChildren > peopleCount) {
+                    return baseHours * totalPeopleFromChildren;
+                }
+            }
+            
+            // Calculate sum of children's WIP hours (recursive)
             const childrenSum = children.reduce((sum, child) => sum + getWIPHours(child), 0);
             
             // Return the larger of ticket's own hours or sum of children's hours
