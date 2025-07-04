@@ -335,6 +335,13 @@ async function main() {
                const mob = ticket['Mob'] || '';
                const assignee = ticket['Assignee'] || '';
                
+               // First, recursively collect from children
+               const children = getChildren(ticket);
+               children.forEach(child => {
+                   const childContributors = collectContributors(child, rdtiActivity);
+                   contributors.push(...childContributors);
+               });
+               
                // If ticket has mob, create entry for each person
                if (mob && mob.trim() !== '') {
                    const people = mob.split(',').map((name: string) => name.trim()).filter((name: string) => name !== '');
@@ -362,13 +369,18 @@ async function main() {
                        workItem: ticket['Work item key']
                    });
                }
-               
-               // Recursively collect from children
-               const children = getChildren(ticket);
-               children.forEach(child => {
-                   const childContributors = collectContributors(child, rdtiActivity);
-                   contributors.push(...childContributors);
-               });
+               // Only assign to Fabio if ticket has hours but NO contributors found (neither from this ticket nor from children)
+               else if (baseHours > 0 && contributors.length === 0) {
+                   contributors.push({
+                       project: rdtiActivity,
+                       who: 'Fabio Lemos Elizandro',
+                       role: 'Employee',
+                       activityType: rdtiActivity === 'Platform' ? 'Support' : 'Core',
+                       hoursCost: baseHours,
+                       phase: 'Development',
+                       workItem: ticket['Work item key']
+                   });
+               }
                
                return contributors;
            }
