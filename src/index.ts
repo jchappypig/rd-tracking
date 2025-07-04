@@ -8,6 +8,8 @@ type Ticket = {
     'Linked work items'?: string;
     'R&DTI Activity'?: string;
     'Work type'?: string;
+    'Work Hours in Progress'?: string;
+    'Sum of WIP hours'?: string;
 };
 
 const INPUT_FILE = 'input.xlsx';
@@ -89,7 +91,10 @@ async function main() {
 
         // Helper function to get all children of a ticket
         function getChildren(parentTicket: Ticket): Ticket[] {
-            return rows.filter(row => row['Parent'] === parentTicket['Work item key']);
+            return rows.filter(row => 
+                row['Parent'] && 
+                row['Parent'].startsWith(parentTicket['Work item key'] + ' ')
+            );
         }
 
         // Helper function to recursively get all descendants
@@ -102,6 +107,45 @@ async function main() {
             }
             
             return descendants;
+        }
+
+        // Helper function to parse time duration to hours
+        function parseTimeToHours(timeStr: string): number {
+            if (!timeStr || timeStr === '') return 0;
+            
+            // Handle different time formats like "1d 2h 30m", "5h 15m", "30m", etc.
+            let totalHours = 0;
+            const timeRegex = /(\d+(?:\.\d+)?)\s*([dhm])/g;
+            let match;
+            
+            while ((match = timeRegex.exec(timeStr)) !== null) {
+                const value = parseFloat(match[1]);
+                const unit = match[2];
+                
+                switch (unit) {
+                    case 'd': totalHours += value * 8; break; // Assuming 8 hours per day
+                    case 'h': totalHours += value; break;
+                    case 'm': totalHours += value / 60; break;
+                }
+            }
+            
+            return totalHours;
+        }
+
+        // Helper function to get WIP hours for a ticket and its children
+        function getWIPHours(ticket: Ticket): number {
+            const ticketHours = parseTimeToHours(ticket['Work Hours in Progress'] || '');
+            const children = getChildren(ticket);
+            
+            if (children.length === 0) {
+                return ticketHours;
+            }
+            
+            // Calculate sum of children's WIP hours
+            const childrenSum = children.reduce((sum, child) => sum + getWIPHours(child), 0);
+            
+            // Return the larger of ticket's own hours or sum of children's hours
+            return Math.max(ticketHours, childrenSum);
         }
 
         // Process tickets with new logic
@@ -138,26 +182,102 @@ async function main() {
             }
         }
 
-        // Write output
-        const outWorkbook = new ExcelJS.Workbook();
-        const outSheet = outWorkbook.addWorksheet('Results');
-
-        const columnOrder = Object.keys(headers);
-        outSheet.addRow(columnOrder); // header
-
-        rows.forEach(row => {
-            const values = columnOrder.map(key => row[key] || '');
-            outSheet.addRow(values);
-        });
-
-        await outWorkbook.xlsx.writeFile(path.resolve(OUTPUT_FILE));
-        console.log(`✅ File saved to ${OUTPUT_FILE}`);
-        console.log(`✅ Updated ${processedCount} rows with R&DTI Activity from linked MAP tickets`);
+        // Calculate Sum of WIP hours for MAP tickets with R&DTI Activities
+        let mapTicketsProcessed = 0;
         
-    } catch (error) {
-        console.error('❌ Error occurred:', error);
-        throw error;
-    }
-}
-
-main().catch(err => console.error('❌ Error:', err));
+        for (const ticket of rows) {
+            // Initialize Sum of WIP hours column
+            ticket['Sum of WIP hours'] = '';
+            
+            // Only process MAP tickets with R&DTI Activities
+            if (isMapTicket(ticket) && ticket['R&DTI Activity']) {
+                const linkedItems = parseLinkedWorkItems(ticket['Linked work items'] || '');
+                let totalWIPHours = 0;
+                
+                if (linkedItems.length > 0) {
+                    // Track which tickets we've already counted to avoid double counting
+                    const countedTickets = new Set<string>();
+                    
+                    // Helper function to collect all descendants of a ticket
+                    function collectAllDescendants(parentTicket: Ticket): Set<string> {
+                        const descendants = new Set<string>();
+                        const children = getChildren(parentTicket);
+                        
+                        for (const child of children) {
+                            descendants.add(child['Work item key']);
+                            // Recursively add grandchildren, etc.
+                            const grandchildren = collectAllDescendants(child);
+                            grandchildren.forEach(gchild => descendants.add(gchild));
+                        }
+                        
+                        return descendants;
+                    }
+                    
+                    // First pass: collect all descendants of all linked items to identify potential double counts
+                    const allDescendants = new Set<string>();
+                    for (const linkedId of linkedItems) {
+                        const linkedTicket = ticketMap[linkedId];
+                        if (linkedTicket && !isMapTicket(linkedTicket)) {
+                            const descendants = collectAllDescendants(linkedTicket);
+                            descendants.forEach(desc => allDescendants.add(desc));
+                        }
+                    }
+                    
+                    // Second pass: calculate WIP hours, avoiding double counting
+                    for (const linkedId of linkedItems) {
+                        const linkedTicket = ticketMap[linkedId];
+                        if (!linkedTicket) continue;
+                        
+                        // Skip if this ticket is a descendant of another linked item (to avoid double counting)
+                        if (allDescendants.has(linkedId)) {
+                            continue;
+                        }
+                        
+                        if (!isMapTicket(linkedTicket)) {
+                            // Non-MAP ticket: get WIP hours (considering children)
+                            const wipHours = getWIPHours(linkedTicket);
+                            totalWIPHours += wipHours;
+                            countedTickets.add(linkedId);
+                        } else {
+                            // MAP ticket: only include if it doesn't have R&DTI Activity
+                            if (!linkedTicket['R&DTI Activity']) {
+                                const wipHours = getWIPHours(linkedTicket);
+                                totalWIPHours += wipHours;
+                                countedTickets.add(linkedId);
+                            }
+                        }
+                    }
+                }
+                
+                // Set the sum of WIP hours (rounded to 2 decimal places)
+                ticket['Sum of WIP hours'] = totalWIPHours.toFixed(2);
+                mapTicketsProcessed++;
+            }
+        }
+        
+        console.log(`✅ Processed ${mapTicketsProcessed} MAP tickets with R&DTI Activities for WIP hours calculation`);
+           
+           // Write output
+           const outWorkbook = new ExcelJS.Workbook();
+           const outSheet = outWorkbook.addWorksheet('Results');
+  
+           // Make sure to include the new "Sum of WIP hours" column
+           const columnOrder = [...Object.keys(headers), 'Sum of WIP hours'];
+           outSheet.addRow(columnOrder); // header
+  
+           rows.forEach(row => {
+               const values = columnOrder.map(key => row[key] || '');
+               outSheet.addRow(values);
+           });
+  
+           await outWorkbook.xlsx.writeFile(path.resolve(OUTPUT_FILE));
+           console.log(`✅ File saved to ${OUTPUT_FILE}`);
+           console.log(`✅ Updated ${processedCount} rows with R&DTI Activity from linked MAP tickets`);
+           
+       } catch (error) {
+           console.error('❌ Error occurred:', error);
+           throw error;
+       }
+   }
+   
+   main().catch(err => console.error('❌ Error:', err));
