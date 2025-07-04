@@ -9,7 +9,7 @@ type Ticket = {
     'R&DTI Activity'?: string;
     'Work type'?: string;
     'Work Hours in Progress'?: string;
-    'Sum of WIP hours'?: string;
+    'Sum of WIP hours'?: number;
 };
 
 type Contributor = {
@@ -236,7 +236,7 @@ async function main() {
         
         for (const ticket of rows) {
             // Initialize Sum of WIP hours column
-            ticket['Sum of WIP hours'] = '';
+            ticket['Sum of WIP hours'] = 0;
             
             // Only process MAP tickets with R&DTI Activities
             if (isMapTicket(ticket) && ticket['R&DTI Activity']) {
@@ -298,8 +298,8 @@ async function main() {
                     }
                 }
                 
-                // Set the sum of WIP hours (rounded to 2 decimal places)
-                ticket['Sum of WIP hours'] = totalWIPHours.toFixed(2);
+                // Set the sum of WIP hours as a number
+                ticket['Sum of WIP hours'] = totalWIPHours;
                 mapTicketsProcessed++;
             }
         }
