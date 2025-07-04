@@ -12,6 +12,16 @@ type Ticket = {
     'Sum of WIP hours'?: string;
 };
 
+type Contributor = {
+    project: string;
+    who: string;
+    role: string;
+    activityType: string;
+    hoursCost: string;
+    phase: string;
+    workItem: string;
+};
+
 const INPUT_FILE = 'input.xlsx';
 const OUTPUT_FILE = 'output_with_rdti.xlsx';
 
@@ -316,38 +326,139 @@ async function main() {
            const transformedHeaders = ['Project', 'Who', 'Role', 'Activity Type', 'Hours/Cost', 'Phase', 'Work Item'];
            transformedSheet.addRow(transformedHeaders);
            
-           // Filter rows that have R&DTI Activity and transform them
-           const rowsWithRDTI = rows.filter(row => row['R&DTI Activity']);
+           // Helper function to collect individual contributors from a ticket
+           function collectContributors(ticket: Ticket, rdtiActivity: string): Contributor[] {
+               const contributors: Contributor[] = [];
+               
+               // Get base hours and people for this ticket
+               const baseHours = parseTimeToHours(ticket['Work Hours in Progress'] || '');
+               const mob = ticket['Mob'] || '';
+               const assignee = ticket['Assignee'] || '';
+               
+               // If ticket has mob, create entry for each person
+               if (mob && mob.trim() !== '') {
+                   const people = mob.split(',').map((name: string) => name.trim()).filter((name: string) => name !== '');
+                   people.forEach((person: string) => {
+                       contributors.push({
+                           project: rdtiActivity,
+                           who: person,
+                           role: 'Employee',
+                           activityType: rdtiActivity === 'Platform' ? 'Support' : 'Core',
+                           hoursCost: baseHours.toFixed(2),
+                           phase: 'Development',
+                           workItem: ticket['Work item key']
+                       });
+                   });
+               }
+               // If ticket has assignee but no mob, create entry for assignee
+               else if (assignee && assignee.trim() !== '' && assignee.trim() !== 'Unassigned') {
+                   contributors.push({
+                       project: rdtiActivity,
+                       who: assignee,
+                       role: 'Employee',
+                       activityType: rdtiActivity === 'Platform' ? 'Support' : 'Core',
+                       hoursCost: baseHours.toFixed(2),
+                       phase: 'Development',
+                       workItem: ticket['Work item key']
+                   });
+               }
+               
+               // Recursively collect from children
+               const children = getChildren(ticket);
+               children.forEach(child => {
+                   const childContributors = collectContributors(child, rdtiActivity);
+                   contributors.push(...childContributors);
+               });
+               
+               return contributors;
+           }
            
-           rowsWithRDTI.forEach(row => {
-               // Column 1: R&DTI Activity → Project
-               const project = row['R&DTI Activity'] || '';
+           // Helper function to trace contributors from linked work items
+           function traceContributorsFromLinkedItems(mapTicket: Ticket): Contributor[] {
+               const contributors: Contributor[] = [];
+               const rdtiActivity = mapTicket['R&DTI Activity'];
                
-               // Column 2: Assignee or Mob (whichever has values) → Who
-               const who = row['Assignee'] || row['Mob'] || '';
+               if (!rdtiActivity) return contributors;
                
-               // Column 3: Role → "Employee" (static value)
-               const role = 'Employee';
+               const linkedItems = parseLinkedWorkItems(mapTicket['Linked work items'] || '');
                
-               // Column 4: Activity Type → "Core" (except if R&DTI Activity is "Platform", then "Support")
-               const activityType = row['R&DTI Activity'] === 'Platform' ? 'Support' : 'Core';
+               // Collect all descendants of linked items for double counting prevention
+               const allDescendants = new Set();
+               for (const linkedId of linkedItems) {
+                   const linkedTicket = ticketMap[linkedId];
+                   if (linkedTicket && !isMapTicket(linkedTicket)) {
+                       const descendants = collectAllDescendants(linkedTicket);
+                       descendants.forEach(desc => allDescendants.add(desc));
+                   }
+               }
                
-               // Column 5: Sum of WIP hours → Hours/Cost
-               const hoursCost = row['Sum of WIP hours'] || '';
+               // Process each linked item
+               for (const linkedId of linkedItems) {
+                   const linkedTicket = ticketMap[linkedId];
+                   if (!linkedTicket) continue;
+                   
+                   // Skip if this ticket is a descendant of another linked item
+                   if (allDescendants.has(linkedId)) continue;
+                   
+                   if (!isMapTicket(linkedTicket)) {
+                       // Non-MAP ticket: collect contributors
+                       const ticketContributors = collectContributors(linkedTicket, rdtiActivity);
+                       contributors.push(...ticketContributors);
+                   } else {
+                       // MAP ticket: only include if it doesn't have R&DTI Activity
+                       if (!linkedTicket['R&DTI Activity']) {
+                           const ticketContributors = collectContributors(linkedTicket, rdtiActivity);
+                           contributors.push(...ticketContributors);
+                       }
+                   }
+               }
                
-               // Column 6: Phase → "Development" (static value)
-               const phase = 'Development';
+               return contributors;
+           }
+           
+           // Helper function to collect all descendants (reuse existing logic)
+           function collectAllDescendants(parentTicket: Ticket): Set<string> {
+               const descendants = new Set<string>();
+               const children = getChildren(parentTicket);
                
-               // Column 7: Work Item
-               const workItem = row['Work item key'] || '';
+               for (const child of children) {
+                   descendants.add(child['Work item key']);
+                   const grandchildren = collectAllDescendants(child);
+                   grandchildren.forEach(gchild => descendants.add(gchild));
+               }
                
-               transformedSheet.addRow([project, who, role, activityType, hoursCost, phase, workItem]);
-           });
+               return descendants;
+           }
+           
+           // Process MAP tickets with R&DTI Activities to get individual contributors
+           let contributorCount = 0;
+           
+           for (const ticket of rows) {
+               if (isMapTicket(ticket) && ticket['R&DTI Activity']) {
+                   const contributors = traceContributorsFromLinkedItems(ticket);
+                   
+                   contributors.forEach(contributor => {
+                       // Only add if the contributor actually has hours
+                       if (parseFloat(contributor.hoursCost) > 0) {
+                           transformedSheet.addRow([
+                               contributor.project,
+                               contributor.who,
+                               contributor.role,
+                               contributor.activityType,
+                               contributor.hoursCost,
+                               contributor.phase,
+                               contributor.workItem
+                           ]);
+                           contributorCount++;
+                       }
+                   });
+               }
+           }
   
            await outWorkbook.xlsx.writeFile(path.resolve(OUTPUT_FILE));
            console.log(`✅ File saved to ${OUTPUT_FILE}`);
            console.log(`✅ Updated ${processedCount} rows with R&DTI Activity from linked MAP tickets`);
-           console.log(`✅ Created transformed data sheet with ${rowsWithRDTI.length} rows`);
+           console.log(`✅ Created transformed data sheet with ${contributorCount} individual contributors`);
            
        } catch (error) {
            console.error('❌ Error occurred:', error);
