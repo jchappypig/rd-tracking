@@ -334,51 +334,89 @@ async function main() {
                const baseHours = parseTimeToHours(ticket['Work Hours in Progress'] || '');
                const mob = ticket['Mob'] || '';
                const assignee = ticket['Assignee'] || '';
+               const baseCount = getPeopleCount(ticket);
                
-               // First, recursively collect from children
+               // Get children
                const children = getChildren(ticket);
-               children.forEach(child => {
-                   const childContributors = collectContributors(child, rdtiActivity);
-                   contributors.push(...childContributors);
-               });
                
-               // If ticket has mob, create entry for each person
-               if (mob && mob.trim() !== '') {
-                   const people = mob.split(',').map((name: string) => name.trim()).filter((name: string) => name !== '');
-                   people.forEach((person: string) => {
+               // Calculate children time using the same logic as getWIPHours
+               const childrenTime = children.reduce((total, child) => {
+                   return total + getWIPHours(child);
+               }, 0);
+               
+               // Use the same logic as getWIPHours: Math.max(baseHours * baseCount, childrenTime)
+               const parentHours = baseHours * Math.max(baseCount, 1);
+               
+               // Check if parent has hours but no people, and children have people (special case)
+               if (baseHours > 0 && baseCount === 0) {
+                   const totalChildrenPeople = children.reduce((total, child) => {
+                       return total + getPeopleCount(child);
+                   }, 0);
+                   
+                   if (totalChildrenPeople > 0) {
+                       const adjustedParentHours = baseHours * totalChildrenPeople;
+                       if (adjustedParentHours >= childrenTime) {
+                           // Use parent hours with children's people count
+                           contributors.push({
+                               project: rdtiActivity,
+                               who: 'Unassigned',
+                               role: 'Employee',
+                               activityType: rdtiActivity === 'Platform' ? 'Support' : 'Core',
+                               hoursCost: adjustedParentHours,
+                               phase: 'Development',
+                               workItem: ticket['Work item key']
+                           });
+                           return contributors;
+                       }
+                   }
+               }
+               
+               // Use the same max logic as getWIPHours
+               if (parentHours >= childrenTime) {
+                   // Use parent hours - collect contributors from this ticket
+                   if (mob && mob.trim() !== '') {
+                       const people = mob.split(',').map((name: string) => name.trim()).filter((name: string) => name !== '');
+                       people.forEach((person: string) => {
+                           contributors.push({
+                               project: rdtiActivity,
+                               who: person,
+                               role: 'Employee',
+                               activityType: rdtiActivity === 'Platform' ? 'Support' : 'Core',
+                               hoursCost: baseHours,
+                               phase: 'Development',
+                               workItem: ticket['Work item key']
+                           });
+                       });
+                   }
+                   // If ticket has assignee but no mob, create entry for assignee
+                   else if (assignee && assignee.trim() !== '' && assignee.trim() !== 'Unassigned') {
                        contributors.push({
                            project: rdtiActivity,
-                           who: person,
+                           who: assignee,
                            role: 'Employee',
                            activityType: rdtiActivity === 'Platform' ? 'Support' : 'Core',
                            hoursCost: baseHours,
                            phase: 'Development',
                            workItem: ticket['Work item key']
                        });
-                   });
-               }
-               // If ticket has assignee but no mob, create entry for assignee
-               else if (assignee && assignee.trim() !== '' && assignee.trim() !== 'Unassigned') {
-                   contributors.push({
-                       project: rdtiActivity,
-                       who: assignee,
-                       role: 'Employee',
-                       activityType: rdtiActivity === 'Platform' ? 'Support' : 'Core',
-                       hoursCost: baseHours,
-                       phase: 'Development',
-                       workItem: ticket['Work item key']
-                   });
-               }
-               // Only assign to Fabio if ticket has hours but NO contributors found (neither from this ticket nor from children)
-               else if (baseHours > 0 && contributors.length === 0) {
-                   contributors.push({
-                       project: rdtiActivity,
-                       who: 'Fabio Lemos Elizandro',
-                       role: 'Employee',
-                       activityType: rdtiActivity === 'Platform' ? 'Support' : 'Core',
-                       hoursCost: baseHours,
-                       phase: 'Development',
-                       workItem: ticket['Work item key']
+                   }
+                   // If ticket has hours but NO contributors found, add as "Unassigned"
+                   else if (baseHours > 0) {
+                       contributors.push({
+                           project: rdtiActivity,
+                           who: 'Unassigned',
+                           role: 'Employee',
+                           activityType: rdtiActivity === 'Platform' ? 'Support' : 'Core',
+                           hoursCost: baseHours,
+                           phase: 'Development',
+                           workItem: ticket['Work item key']
+                       });
+                   }
+               } else {
+                   // Use children time - collect contributors from children
+                   children.forEach(child => {
+                       const childContributors = collectContributors(child, rdtiActivity);
+                       contributors.push(...childContributors);
                    });
                }
                
@@ -404,26 +442,23 @@ async function main() {
                    }
                }
                
-               // Process each linked item
-               for (const linkedId of linkedItems) {
-                   const linkedTicket = ticketMap[linkedId];
-                   if (!linkedTicket) continue;
-                   
-                   // Skip if this ticket is a descendant of another linked item
-                   if (allDescendants.has(linkedId)) continue;
-                   
-                   if (!isMapTicket(linkedTicket)) {
-                       // Non-MAP ticket: collect contributors
-                       const ticketContributors = collectContributors(linkedTicket, rdtiActivity);
-                       contributors.push(...ticketContributors);
-                   } else {
-                       // MAP ticket: only include if it doesn't have R&DTI Activity
-                       if (!linkedTicket['R&DTI Activity']) {
-                           const ticketContributors = collectContributors(linkedTicket, rdtiActivity);
-                           contributors.push(...ticketContributors);
-                       }
-                   }
-               }
+                               // Process each linked item
+                for (const linkedId of linkedItems) {
+                    const linkedTicket = ticketMap[linkedId];
+                    if (!linkedTicket) continue;
+                    
+                    // Skip if this ticket is a descendant of another linked item
+                    if (allDescendants.has(linkedId)) continue;
+                    
+                    // Skip MAP tickets that have R&DTI Activity (to avoid double counting between MAP tickets)
+                    if (isMapTicket(linkedTicket) && linkedTicket['R&DTI Activity']) {
+                        continue;
+                    }
+                    
+                    // Collect contributors from this linked item (including non-MAP tickets with R&DTI Activity)
+                    const ticketContributors = collectContributors(linkedTicket, rdtiActivity);
+                    contributors.push(...ticketContributors);
+                }
                
                return contributors;
            }
@@ -440,6 +475,161 @@ async function main() {
                }
                
                return descendants;
+           }
+           
+           // Create WIP Hours Tracing sheet to debug discrepancies
+           const wipTracingSheet = outWorkbook.addWorksheet('WIP Hours Tracing');
+           const wipTracingHeaders = ['MAP Ticket', 'MAP R&DTI Activity', 'MAP WIP Hours', 'Contributing Ticket', 'Contributing Hours', 'Contributing People', 'People Count', 'Calculated Hours', 'Notes'];
+           wipTracingSheet.addRow(wipTracingHeaders);
+           
+           // Helper function to trace all tickets that contribute to WIP hours calculation
+           function traceWIPHoursContributions(mapTicket: Ticket): any[] {
+               const contributions: any[] = [];
+               const rdtiActivity = mapTicket['R&DTI Activity'];
+               const mapWIPHours = mapTicket['Sum of WIP hours'] || 0;
+               
+               if (!rdtiActivity) return contributions;
+               
+               const linkedItems = parseLinkedWorkItems(mapTicket['Linked work items'] || '');
+               
+               // Collect all descendants for double counting prevention
+               const allDescendants = new Set();
+               for (const linkedId of linkedItems) {
+                   const linkedTicket = ticketMap[linkedId];
+                   if (linkedTicket && !isMapTicket(linkedTicket)) {
+                       const descendants = collectAllDescendants(linkedTicket);
+                       descendants.forEach(desc => allDescendants.add(desc));
+                   }
+               }
+               
+               // Process each linked item (same logic as WIP hours calculation)
+               for (const linkedId of linkedItems) {
+                   const linkedTicket = ticketMap[linkedId];
+                   if (!linkedTicket) {
+                       contributions.push({
+                           mapTicket: mapTicket['Work item key'],
+                           mapRDTI: rdtiActivity,
+                           mapWIPHours: mapWIPHours,
+                           contributingTicket: linkedId,
+                           contributingHours: 0,
+                           contributingPeople: 'NOT FOUND',
+                           peopleCount: 0,
+                           calculatedHours: 0,
+                           notes: 'Missing linked item'
+                       });
+                       continue;
+                   }
+                   
+                   // Skip if descendant of another linked item
+                   if (allDescendants.has(linkedId)) {
+                       contributions.push({
+                           mapTicket: mapTicket['Work item key'],
+                           mapRDTI: rdtiActivity,
+                           mapWIPHours: mapWIPHours,
+                           contributingTicket: linkedId,
+                           contributingHours: 0,
+                           contributingPeople: 'SKIPPED',
+                           peopleCount: 0,
+                           calculatedHours: 0,
+                           notes: 'Descendant of another linked item'
+                       });
+                       continue;
+                   }
+                   
+                   // For MAP tickets, only include if they don't have R&DTI Activity
+                   if (isMapTicket(linkedTicket) && linkedTicket['R&DTI Activity']) {
+                       contributions.push({
+                           mapTicket: mapTicket['Work item key'],
+                           mapRDTI: rdtiActivity,
+                           mapWIPHours: mapWIPHours,
+                           contributingTicket: linkedId,
+                           contributingHours: 0,
+                           contributingPeople: 'SKIPPED',
+                           peopleCount: 0,
+                           calculatedHours: 0,
+                           notes: 'MAP ticket with R&DTI Activity'
+                       });
+                       continue;
+                   }
+                   
+                   // Calculate WIP hours for this linked item
+                   const linkedWIPHours = getWIPHours(linkedTicket);
+                   
+                   // Trace all tickets that contribute to this linked item's WIP hours
+                   const subContributions = traceTicketWIPContributions(linkedTicket, mapTicket['Work item key'], rdtiActivity, mapWIPHours);
+                   contributions.push(...subContributions);
+               }
+               
+               return contributions;
+           }
+           
+           // Helper function to trace WIP contributions from a specific ticket
+           function traceTicketWIPContributions(ticket: Ticket, mapTicket: string, mapRDTI: string, mapWIPHours: number): any[] {
+               const contributions: any[] = [];
+               const baseHours = parseTimeToHours(ticket['Work Hours in Progress'] || '');
+               const assignee = ticket['Assignee'] || '';
+               const mob = ticket['Mob'] || '';
+               const peopleCount = getPeopleCount(ticket);
+               const calculatedHours = baseHours * Math.max(peopleCount, 1);
+               
+               // Get people list
+               const people = new Set<string>();
+               if (assignee && assignee !== 'Unassigned') {
+                   people.add(assignee);
+               }
+               if (mob && mob.trim() !== '') {
+                   const mobMembers = mob.split(',').map((m: string) => m.trim());
+                   mobMembers.forEach((member: string) => {
+                       if (member) people.add(member);
+                   });
+               }
+               
+               const peopleList = Array.from(people).join(', ') || 'None';
+               
+               // Log this ticket's direct contribution
+               contributions.push({
+                   mapTicket: mapTicket,
+                   mapRDTI: mapRDTI,
+                   mapWIPHours: mapWIPHours,
+                   contributingTicket: ticket['Work item key'],
+                   contributingHours: baseHours,
+                   contributingPeople: peopleList,
+                   peopleCount: peopleCount,
+                   calculatedHours: calculatedHours,
+                   notes: people.size > 0 ? 'Has contributors' : (baseHours > 0 ? 'Unassigned work' : 'No contributors')
+               });
+               
+               // Process children
+               const children = getChildren(ticket);
+               for (const child of children) {
+                   const childContributions = traceTicketWIPContributions(child, mapTicket, mapRDTI, mapWIPHours);
+                   contributions.push(...childContributions);
+               }
+               
+               return contributions;
+           }
+           
+           // Generate WIP Hours tracing data
+           let totalTracingRows = 0;
+           for (const ticket of rows) {
+               if (isMapTicket(ticket) && ticket['R&DTI Activity']) {
+                   const contributions = traceWIPHoursContributions(ticket);
+                   
+                   contributions.forEach(contrib => {
+                       wipTracingSheet.addRow([
+                           contrib.mapTicket,
+                           contrib.mapRDTI,
+                           contrib.mapWIPHours,
+                           contrib.contributingTicket,
+                           contrib.contributingHours,
+                           contrib.contributingPeople,
+                           contrib.peopleCount,
+                           contrib.calculatedHours,
+                           contrib.notes
+                       ]);
+                       totalTracingRows++;
+                   });
+               }
            }
            
            // Process MAP tickets with R&DTI Activities to get individual contributors
@@ -546,6 +736,7 @@ async function main() {
            console.log(`✅ Updated ${processedCount} rows with R&DTI Activity from linked MAP tickets`);
            console.log(`✅ Created transformed data sheet with ${contributorCount} individual contributors`);
            console.log(`✅ Created project summary sheet with ${summaryCount} aggregated contributors`);
+           console.log(`✅ Created WIP Hours tracing sheet with ${totalTracingRows} tracing entries`);
            
        } catch (error) {
            console.error('❌ Error occurred:', error);
