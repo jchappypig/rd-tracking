@@ -269,10 +269,46 @@ async function main() {
                const values = columnOrder.map(key => row[key] || '');
                outSheet.addRow(values);
            });
+
+           // Create new sheet with transformed data
+           const transformedSheet = outWorkbook.addWorksheet('Transformed Data');
+           
+           // Add headers for the new sheet
+           const transformedHeaders = ['Project', 'Who', 'Role', 'Activity Type', 'Hours/Cost', 'Phase', 'Work Item'];
+           transformedSheet.addRow(transformedHeaders);
+           
+           // Filter rows that have R&DTI Activity and transform them
+           const rowsWithRDTI = rows.filter(row => row['R&DTI Activity']);
+           
+           rowsWithRDTI.forEach(row => {
+               // Column 1: R&DTI Activity → Project
+               const project = row['R&DTI Activity'] || '';
+               
+               // Column 2: Assignee or Mob (whichever has values) → Who
+               const who = row['Assignee'] || row['Mob'] || '';
+               
+               // Column 3: Role → "Employee" (static value)
+               const role = 'Employee';
+               
+               // Column 4: Activity Type → "Core" (except if R&DTI Activity is "Platform", then "Support")
+               const activityType = row['R&DTI Activity'] === 'Platform' ? 'Support' : 'Core';
+               
+               // Column 5: Sum of WIP hours → Hours/Cost
+               const hoursCost = row['Sum of WIP hours'] || '';
+               
+               // Column 6: Phase → "Development" (static value)
+               const phase = 'Development';
+               
+               // Column 7: Work Item
+               const workItem = row['Work item key'] || '';
+               
+               transformedSheet.addRow([project, who, role, activityType, hoursCost, phase, workItem]);
+           });
   
            await outWorkbook.xlsx.writeFile(path.resolve(OUTPUT_FILE));
            console.log(`✅ File saved to ${OUTPUT_FILE}`);
            console.log(`✅ Updated ${processedCount} rows with R&DTI Activity from linked MAP tickets`);
+           console.log(`✅ Created transformed data sheet with ${rowsWithRDTI.length} rows`);
            
        } catch (error) {
            console.error('❌ Error occurred:', error);
